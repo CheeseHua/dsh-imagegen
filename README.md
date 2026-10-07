@@ -142,6 +142,10 @@ image editing and the error paths for real, asserting that the key appears in
 neither the tool schema, the results, nor any error message. Nothing in `lib/`
 is test scaffolding.
 
+> **Pushing to CI:** the git credential for this repository lacks the `workflow`
+> OAuth scope, so a commit that modifies `.github/workflows/` is rejected. Run
+> `gh auth refresh -h github.com -s workflow` once to restore ordinary pushes.
+
 ## License
 
 MIT

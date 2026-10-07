@@ -123,6 +123,10 @@ node tools/integration.mjs  # 真实 cordis Context + 真实 ToolRegistry + 本�
 `tools/integration.mjs` 会起一个本地 HTTP 服务器，真实跑完生成 / 图生图 / 错误分支，
 并断言 Key 不出现在工具 schema、结果或错误消息里。`lib/` 里没有任何测试代码。
 
+> **推送 CI 注意**：本仓库的 git 凭据缺少 `workflow` OAuth 作用域，改动
+> `.github/workflows/` 的提交会被拒绝。执行一次
+> `gh auth refresh -h github.com -s workflow` 即可恢复正常推送。
+
 ## 许可证
 
 MIT
