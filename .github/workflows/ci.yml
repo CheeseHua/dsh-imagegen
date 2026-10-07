@@ -16,19 +16,22 @@ jobs:
         with:
           node-version: 22
 
-      # The probes import @deepseek-ai/schemastery, @deepseek-ai/dsh-tools and
-      # @deepseek-ai/cordis. A plain install resolves them from the registry when
-      # they are published; dsh vendors them, so failure to install is tolerated
-      # and the probes are skipped rather than failing the build.
+      # The probes import @deepseek-ai/schemastery, @deepseek-ai/dsh-tools,
+      # @deepseek-ai/dsh-typert-protocol, @deepseek-ai/cordis and zod. A plain
+      # install resolves them from the registry when published; dsh vendors
+      # them, so failure to install is tolerated rather than failing the build.
       - name: Install peer packages
         continue-on-error: true
-        run: npm install --no-save --no-package-lock @deepseek-ai/schemastery @deepseek-ai/dsh-tools @deepseek-ai/cordis
+        run: npm install --no-save --no-package-lock @deepseek-ai/schemastery @deepseek-ai/dsh-tools @deepseek-ai/dsh-typert-protocol @deepseek-ai/cordis zod
 
       - name: Syntax check
-        run: node --check lib/index.js
+        run: node --check lib/index.js && node --check lib/client.js
 
       - name: Unit probe
         run: node tools/probe.mjs
+
+      - name: Client bundle probe
+        run: node tools/client.mjs
 
       - name: Integration probe
         run: node tools/integration.mjs
