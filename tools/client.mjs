@@ -61,7 +61,7 @@ new Function('window', `${source}\nreturn window.__ModuleLoader__;`)(globalThis.
 
 check('bundle registers under the plugin id', loaderId, 'dsh-imagegen')
 check('module exposes name', registered?.name, 'dsh-imagegen')
-check('module injects the slots service', registered?.inject, ['slots'])
+check('module injects the slots and remote services', registered?.inject, ['slots', 'remote'])
 check('module exposes apply', typeof registered?.apply, 'function')
 
 /* ── register the section ────────────────────────────────────────────────── */
@@ -102,19 +102,29 @@ const slots = {
   inject: (_slot, run) => run(),
   register: (options, render) => registrations.push({ options, render }),
 }
-// The bundle resolves its remote namespace from the plugin context, exactly as
-// a real client plugin does (`ctx.get('remote')`).
+// Host remote namespaces reach the section through `ctx.remote`, published to
+// the slot by its `inject` callback — which is what the real slots service
+// resolves before rendering.
 const ctxRemote = remote
-registered.apply({
-  get: (key) => (key === 'slots' ? slots : key === 'remote' ? ctxRemote : undefined),
+const ctx = {
+  get: (key) => (key === 'slots' ? slots : undefined),
+  remote: ctxRemote,
   effect: () => () => {},
-})
+}
+registered.apply(ctx)
 
 check('exactly one section registered', registrations.length, 1)
 const section = registrations[0]
 check('registered into settings.section', section.options.name, 'settings.section')
 check('section id', section.options.id, 'imagegen')
 check('section label is 生图', section.options.label, '生图')
+check('declares remote in its client inject list', registered.inject.includes('remote'), true)
+
+/** Render through the slot, resolving injected props exactly as the host does. */
+const injectedProps = () => {
+  const extra = typeof section.options.inject === 'function' ? section.options.inject() : {}
+  return { ...extra }
+}
 
 /* ── render helpers ──────────────────────────────────────────────────────── */
 
@@ -133,7 +143,8 @@ const instantiate = (value) => {
 
 /** Mount the section and drain effects so the async config read settles.
  * Hook state is cleared first: each mount is a fresh component instance. */
-const mount = async (props) => {
+const mount = async () => {
+  const props = injectedProps()
   hookState.length = 0
   hookIndex = 0
   effects = []
@@ -169,7 +180,7 @@ const flattenText = (node) => {
 
 /* ── mount against the stubbed host ──────────────────────────────────────── */
 
-const tree = await mount({ ctx: { remote } })
+const tree = await mount()
 check('renders a container element', tree?.type, 'div')
 const nodes = collect(tree)
 const inputs = nodes.filter((node) => node.type === 'input')
@@ -192,7 +203,7 @@ const password = inputs.find((node) => node.props.type === 'password')
 password.props.onChange({ target: { value: 'sk-typed-by-user' } })
 hookIndex = 0
 effects = []
-const typedTree = instantiate(section.render({ ctx: { remote } }))
+const typedTree = instantiate(section.render(injectedProps()))
 const save = collect(typedTree)
   .filter((node) => node.type === 'button')
   .find((node) => flattenText(node) === '保存')
@@ -206,7 +217,7 @@ check('save wrote the typed key once', calls.find(([name]) => name === 'setApiKe
 
 // A plain save (nothing typed) must leave the stored secret alone.
 calls.length = 0
-const tree2 = await mount({ ctx: { remote } })
+const tree2 = await mount()
 const save2 = collect(tree2)
   .filter((node) => node.type === 'button')
   .find((node) => flattenText(node) === '保存')
@@ -218,7 +229,7 @@ check('plain save never touches the key', calls.some(([name]) => name === 'setAp
 // Clearing is explicit and separate.
 calls.length = 0
 globalThis.window.confirm = () => true
-const tree3 = await mount({ ctx: { remote } })
+const tree3 = await mount()
 const clear = collect(tree3)
   .filter((node) => node.type === 'button')
   .find((node) => flattenText(node).includes('清除'))
