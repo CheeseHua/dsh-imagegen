@@ -58,8 +58,16 @@ Open **Settings →「生图」**. The section sits beside the other plugin sect
 > settings page: the Web settings panel is itself a client plugin, so a section
 > only appears when the package declares `dsh.client.platform = web` and ships
 > `lib/client.js` registering into the `settings.section` slot. `lib/client.js`
-> is that bundle, and `lib/index.js` publishes the key-free endpoint it talks to
-> (`ctx.remote.imagegen`) through a Typert manifest.
+> is that bundle, and `lib/index.js` serves the key-free HTTP routes it calls.
+
+> **Saves apply immediately, even without hot reload.** The running plugin does
+> not re-read `fiber.config` when the Loader hot reload is unavailable (a
+> deployment that logs `config reload failed` / `HMR is disposed` keeps serving
+> boot-time values). Every operation therefore resolves the effective config
+> fresh from the settings service's `describe()`, whose `base` + `user` layers
+> are re-read from the profile document on each call. This was a real bug: a
+> saved `model` change reached the profile patch, yet generations kept using the
+> old model until the app was restarted.
 
 ### API key resolution order
 

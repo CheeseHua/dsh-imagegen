@@ -1,6 +1,6 @@
 {
   "name": "dsh-imagegen",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "DeepSeek Harness plugin: OpenAI-compatible image generation and image editing tools with a visual model/API configuration panel (API key is write-only and secret-redacted).",
   "license": "MIT",
   "type": "module",

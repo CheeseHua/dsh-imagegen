@@ -55,7 +55,14 @@ dsh plugin add github:CheeseHua/dsh-imagegen
 > **为什么必须有客户端 bundle。** 纯宿主端插件不会自动获得设置页：设置面板本身就是一个
 > 客户端插件，只有声明了 `dsh.client.platform = web` 并且提供 `lib/client.js` 注册到
 > `settings.section` 插槽，栏目才会出现。`lib/client.js` 就是这个 bundle，
-> 而 `lib/index.js` 通过 Typert manifest 发布它调用的免密端点 `ctx.remote.imagegen`。
+> 而 `lib/index.js` 提供它调用的免密 HTTP 路由。
+
+> **保存后立即生效，不依赖热重载。** 当 Loader 热重载不可用时（日志里会出现
+> `config reload failed` / `HMR is disposed`），运行中的插件不会重新读取
+> `fiber.config`，会一直用启动时的旧值。所以每次操作都会重新从设置服务的
+> `describe()` 解析有效配置——它的 `base` + `user` 两层是每次调用都从 profile 文档
+> 重新读的。这曾经是个真实 bug：改了 `model` 后配置写进了 patch 文件，但生成仍然
+> 用旧模型，直到重启 App 才变。
 
 ### API Key 的取值顺序
 

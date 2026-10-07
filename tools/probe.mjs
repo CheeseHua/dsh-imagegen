@@ -76,5 +76,79 @@ pass &= check('the client bundle calls the exported key route', clientSource.inc
 pass &= check('the client never asks the host for a key value', clientSource.includes('getApiKey'), false)
 pass &= check('the client never renders key material', /sk-/.test(clientSource.replace(/sk-typed-by-user/g, '')), false)
 
+/* ── effective config resolution ─────────────────────────────────────────── */
+
+// Regression guard: a settings save must win even when the running fiber was
+// never reloaded. Observed live — the profile patch said
+// `model: gpt-image-2.5-sunburst` while the process still reported
+// `gpt-image-2`, so generations kept using the old model.
+
+const staleFiber = { model: 'gpt-image-2', baseURL: 'https://cf.api.fan' }
+const captured = { model: 'even-older' }
+const savedSettings = {
+  describe: () => [
+    { ns: 'other', base: {}, user: {} },
+    { ns: 'imagegen', base: { model: 'gpt-image-2', timeoutMs: 180000 }, user: { model: 'gpt-image-2.5-sunburst' } },
+  ],
+}
+
+const resolved = mod.effectiveConfigFor({ settings: savedSettings, fiberConfig: staleFiber, fallback: captured })
+console.log(`\nEffective config   : model=${resolved.model} timeoutMs=${resolved.timeoutMs}`)
+
+pass &= check('the saved value beats the stale fiber', resolved.model, 'gpt-image-2.5-sunburst')
+pass &= check('untouched fields keep their base value', resolved.timeoutMs, 180000)
+
+// Fallbacks, so a missing or broken settings service degrades instead of throwing.
+pass &= check(
+  'no settings service falls back to the fiber config',
+  mod.effectiveConfigFor({ settings: undefined, fiberConfig: staleFiber, fallback: captured }).model,
+  'gpt-image-2',
+)
+pass &= check(
+  'a throwing describe() falls back to the fiber config',
+  mod.effectiveConfigFor({
+    settings: {
+      describe: () => {
+        throw new Error('boom')
+      },
+    },
+    fiberConfig: staleFiber,
+    fallback: captured,
+  }).model,
+  'gpt-image-2',
+)
+pass &= check(
+  'an unknown namespace falls back to the fiber config',
+  mod.effectiveConfigFor({
+    settings: { describe: () => [{ ns: 'other', base: {}, user: {} }] },
+    fiberConfig: staleFiber,
+    fallback: captured,
+  }).model,
+  'gpt-image-2',
+)
+pass &= check(
+  'an empty merge falls back to the fiber config',
+  mod.effectiveConfigFor({
+    settings: { describe: () => [{ ns: 'imagegen', base: {}, user: {} }] },
+    fiberConfig: staleFiber,
+    fallback: captured,
+  }).model,
+  'gpt-image-2',
+)
+pass &= check(
+  'no fiber config falls back to the captured config',
+  mod.effectiveConfigFor({ settings: undefined, fiberConfig: undefined, fallback: captured }).model,
+  'even-older',
+)
+pass &= check(
+  'the namespace is addressable',
+  mod.effectiveConfigFor({
+    settings: { describe: () => [{ ns: 'imagegen', base: {}, user: { model: 'x' } }] },
+    namespace: 'imagegen',
+    fallback: captured,
+  }).model,
+  'x',
+)
+
 console.log(`\n${pass ? 'ALL PASS' : 'FAILURES PRESENT'}`)
 process.exitCode = pass ? 0 : 1
