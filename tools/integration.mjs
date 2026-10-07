@@ -8,7 +8,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createServer } from 'node:http'
 import { existsSync } from 'node:fs'
-import { rm, writeFile } from 'node:fs/promises'
+import { rm, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -65,6 +65,32 @@ class StubAttachments extends Service {
       height: 1024,
       name,
     }
+  }
+}
+
+/** Minimal credential store: enough to prove the key is written, not read back. */
+class StubCredentials extends Service {
+  constructor(ctx) {
+    super(ctx, 'credentials')
+    this.map = new Map()
+  }
+  async resolve(ref) {
+    const value = this.map.get(ref)
+    return value === undefined ? undefined : { value }
+  }
+  async set(ref, value) {
+    this.map.set(ref, value)
+  }
+}
+
+/** Records the path-addressed ops the panel issues. */
+class StubSettings extends Service {
+  constructor(ctx) {
+    super(ctx, 'settings')
+    this.ops = []
+  }
+  async mutate(_ns, ops) {
+    this.ops.push(...ops)
   }
 }
 
@@ -257,6 +283,58 @@ try {
   check('provider detail is reported', /bad key/.test(error.message), true)
   check('error carries no api key', /sk-integration-secret-value/.test(error.message), false)
 }
+
+/* ── 7. the settings panel service is strictly key-free ──────────────────── */
+
+// The panel talks to ImagegenRuntime over Typert. Drive it directly: the point
+// of these checks is that the API key can be written but never read back.
+// Keep the legacy fallback out of the way so this section is machine-independent.
+process.env.IMG_LEGACY_CONFIG_FILE = path.join(here, '.no-such-key-file.json')
+const panelCtx = new Context()
+const panelCredentials = new StubCredentials(panelCtx)
+const panelSettings = new StubSettings(panelCtx)
+const emptyReaders = mod.configReaders({ ...baseConfig, apiKey: '', apiKeyEnv: 'IMG_PANEL_TEST_KEY' })
+const runtime = new mod.ImagegenRuntime(panelCtx, emptyReaders, { ...baseConfig, apiKey: '' })
+
+const initial = await runtime.getConfig()
+check('panel reports keySet=false with no key anywhere', initial.keySet, false)
+check('panel reports source none', initial.keySource, 'none')
+check('panel exposes the endpoint', initial.endpoint, 'https://example.invalid/v1/images/generations')
+check(
+  'panel payload has no apiKey field',
+  Object.hasOwn(initial, 'apiKey'),
+  false,
+)
+check('panel payload is key-free', JSON.stringify(initial).includes('sk-'), false)
+
+const afterWrite = await runtime.setApiKey({ apiKey: 'sk-panel-secret-9999' })
+check('writing a key flips keySet', afterWrite.keySet, true)
+check('the write went to the credential service', panelCredentials.map.get('IMG_PANEL_TEST_KEY'), 'sk-panel-secret-9999')
+check('the write never returns the secret', JSON.stringify(afterWrite).includes('sk-panel-secret-9999'), false)
+
+const afterClear = await runtime.setApiKey({ clear: true })
+check('clearing removes the stored value', panelCredentials.map.get('IMG_PANEL_TEST_KEY'), '')
+check('clearing reports keySet=false again', afterClear.keySet, false)
+delete process.env.IMG_LEGACY_CONFIG_FILE
+
+// Ordinary fields route through the path-addressed settings mutation, so a
+// form save can never restate (and therefore never erase) the stored secret.
+await runtime.setConfig({ model: 'dall-e-3', timeoutMs: 4242, outputDir: 'C:/tmp/out' })
+check('setConfig mutated the model path', panelSettings.ops.find((o) => o.path[0] === 'model')?.value, 'dall-e-3')
+check('setConfig mutated the timeout path', panelSettings.ops.find((o) => o.path[0] === 'timeoutMs')?.value, 4242)
+check(
+  'setConfig never touches the apiKey path',
+  panelSettings.ops.some((o) => o.path[0] === 'apiKey'),
+  false,
+)
+
+/* ── 8. the client bundle exists and registers the settings section ──────── */
+
+const clientSource = await readFile(path.resolve(here, '..', 'lib', 'client.js'), 'utf8')
+check('client bundle uses the ModuleLoader wrapper', clientSource.includes('window.__ModuleLoader__.load'), true)
+check('client bundle registers a settings section', clientSource.includes('settings.section'), true)
+check('client bundle labels the section 生图', clientSource.includes("label: '生图'"), true)
+check('client bundle only calls setApiKey, never reads a key', clientSource.includes('getApiKey'), false)
 
 await rm(outDir, { recursive: true, force: true })
 server.close()
