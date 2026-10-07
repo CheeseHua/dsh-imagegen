@@ -242,5 +242,18 @@ const afterFailure = instantiate(section.render({}))
 check('a host error renders a message', flattenText(afterFailure).includes('保存失败'), true)
 check('the host message is shown verbatim', flattenText(afterFailure).includes('凭据服务不可用'), true)
 
+// A stale Host (routes not registered yet) must say so, not show a bare 404.
+calls.length = 0
+globalThis.fetch = async (url, init) => {
+  calls.push([init?.method ?? 'GET', url, init?.body])
+  return { ok: false, status: 404, json: async () => ({}) }
+}
+const staleTree = await mount()
+check(
+  'a stale Host is explained, not shown as a bare 404',
+  flattenText(staleTree).includes('请重启 DeepSeek Harness'),
+  true,
+)
+
 console.log(`\n${pass ? 'ALL PASS' : 'FAILURES PRESENT'}`)
 process.exitCode = pass ? 0 : 1
