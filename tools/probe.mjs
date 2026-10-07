@@ -1,6 +1,7 @@
 // Local verification probe for dsh-imagegen (not shipped in the repo's lib/).
 // Run: node tools/probe.mjs
 import { pathToFileURL } from 'node:url'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -16,7 +17,7 @@ const check = (label, actual, expected) => {
 
 let pass = true
 pass &= check('name', mod.name, 'dsh-imagegen')
-pass &= check('inject', mod.inject, ['tools', 'attachments', 'typert'])
+pass &= check('inject', mod.inject, ['tools', 'attachments', 'webServer'])
 pass &= check('endpoint bare host', mod.endpointFor('https://cf.api.fan', 'generations'), 'https://cf.api.fan/v1/images/generations')
 pass &= check('endpoint /v1 + slash', mod.endpointFor('https://cf.api.fan/v1/', 'edits'), 'https://cf.api.fan/v1/images/edits')
 pass &= check('endpoint empty → default', mod.endpointFor('', 'generations'), `${mod.DEFAULT_BASE_URL}/v1/images/generations`)
@@ -60,42 +61,20 @@ pass &= check('name lookup is stable', nameOf(properties.apiKey), 'apiKey')
 
 /* ── the settings-panel wire contract ─────────────────────────────────────── */
 
-// The panel binds `ctx.remote.imagegen`; the manifest must publish that service
-// and the key-free result shape must never carry a secret field.
-const manifest = mod.IMAGEGEN_MANIFEST
-const service = manifest.model.services.find((row) => row.key === 'imagegen')
-console.log(`\nService key        : ${service?.key}`)
-console.log(`Service methods    : ${(service?.members ?? []).map((m) => m.name).join(', ')}`)
-console.log(`Invocations        : ${mod.IMAGEGEN_INVOCATIONS.map((i) => i.method).join(', ')}`)
+// The panel speaks to the host over this plugin's own routes, so assert the
+// exported paths are exactly the ones the client bundle calls.
+console.log(`\nRoute prefix       : ${mod.ROUTE_PREFIX}`)
+console.log(`Routes             : ${Object.values(mod.ROUTES).join(', ')}`)
 
-pass &= check('manifest publishes the imagegen service', service !== undefined, true)
-pass &= check(
-  'service exposes getConfig/setConfig/setApiKey',
-  (service?.members ?? []).map((m) => m.name).sort(),
-  ['getConfig', 'setApiKey', 'setConfig'],
-)
-pass &= check('manifest face is host', manifest.face, 'host')
-pass &= check('manifest package name', manifest.package, 'dsh-imagegen')
+pass &= check('routes are namespaced under the plugin', mod.ROUTE_PREFIX, '/plugins/dsh-imagegen')
+pass &= check('config route', mod.ROUTES.config, '/plugins/dsh-imagegen/config')
+pass &= check('key route', mod.ROUTES.key, '/plugins/dsh-imagegen/key')
 
-// These codecs are zod schemas, so inspect them through zod's shape/def API.
-const shapeOf = (schema) => schema?.shape ?? schema?._def?.shape?.() ?? {}
-const typeNameOf = (schema) => schema?._def?.type ?? schema?._def?.typeName ?? 'unknown'
-
-const panelSchema = mod.IMAGEGEN_INVOCATIONS[0].result.create()
-const panelShape = shapeOf(panelSchema)
-const panelFields = Object.keys(panelShape)
-console.log(`Panel fields       : ${panelFields.join(', ')}`)
-
-pass &= check('panel reports keySet', panelFields.includes('keySet'), true)
-pass &= check('panel reports keySource', panelFields.includes('keySource'), true)
-pass &= check('panel has NO exact apiKey field', panelFields.includes('apiKey'), false)
-pass &= check('panel has no secret-role field', JSON.stringify(panelFields).includes('"apiKey"'), false)
-pass &= check('panel exposes the endpoint', panelFields.includes('endpoint'), true)
-pass &= check('keySet is a boolean', typeNameOf(panelShape.keySet), 'boolean')
-pass &= check('panel schema carries no secret', panelFields.includes('apiKey'), false)
-
-const setKeyShape = shapeOf(mod.IMAGEGEN_INVOCATIONS[2].parameters[0].codec.create())
-pass &= check('setApiKey accepts apiKey + clear', Object.keys(setKeyShape).sort(), ['apiKey', 'clear'])
+const clientSource = readFileSync(path.resolve(here, '..', 'lib', 'client.js'), 'utf8')
+pass &= check('the client bundle calls the exported config route', clientSource.includes(`'${mod.ROUTES.config}'`), true)
+pass &= check('the client bundle calls the exported key route', clientSource.includes(`'${mod.ROUTES.key}'`), true)
+pass &= check('the client never asks the host for a key value', clientSource.includes('getApiKey'), false)
+pass &= check('the client never renders key material', /sk-/.test(clientSource.replace(/sk-typed-by-user/g, '')), false)
 
 console.log(`\n${pass ? 'ALL PASS' : 'FAILURES PRESENT'}`)
 process.exitCode = pass ? 0 : 1

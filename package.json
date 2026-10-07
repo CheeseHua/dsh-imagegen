@@ -1,6 +1,6 @@
 {
   "name": "dsh-imagegen",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "DeepSeek Harness plugin: OpenAI-compatible image generation and image editing tools with a visual model/API configuration panel (API key is write-only and secret-redacted).",
   "license": "MIT",
   "type": "module",
@@ -32,9 +32,7 @@
   ],
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": "*",
-    "@deepseek-ai/schemastery": "^3.18.0",
-    "@deepseek-ai/dsh-typert-protocol": "*",
-    "zod": "^4.0.0"
+    "@deepseek-ai/schemastery": "^3.18.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-tools": {
@@ -42,20 +40,12 @@
     },
     "@deepseek-ai/schemastery": {
       "optional": true
-    },
-    "@deepseek-ai/dsh-typert-protocol": {
-      "optional": true
-    },
-    "zod": {
-      "optional": true
     }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": ">=4.0.4",
     "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6",
-    "@deepseek-ai/dsh-typert-protocol": ">=0.1.0-rc.6",
-    "@deepseek-ai/schemastery": "^3.18.4",
-    "zod": "^4.6.5"
+    "@deepseek-ai/schemastery": "^3.18.4"
   },
   "dsh": {
     "bundle": {

@@ -61,10 +61,10 @@ new Function('window', `${source}\nreturn window.__ModuleLoader__;`)(globalThis.
 
 check('bundle registers under the plugin id', loaderId, 'dsh-imagegen')
 check('module exposes name', registered?.name, 'dsh-imagegen')
-check('module injects the slots and remote services', registered?.inject, ['slots', 'remote'])
+check('module injects the slots service', registered?.inject, ['slots'])
 check('module exposes apply', typeof registered?.apply, 'function')
 
-/* ── register the section ────────────────────────────────────────────────── */
+/* ── a fetch stand-in for the plugin's own routes ────────────────────────── */
 
 const calls = []
 const hostConfig = {
@@ -80,21 +80,18 @@ const hostConfig = {
   keySource: 'legacy-key-file',
   endpoint: 'https://cf.api.fan/v1/images/generations',
 }
-const remote = {
-  imagegen: {
-    getConfig: async () => {
-      calls.push(['getConfig'])
-      return hostConfig
-    },
-    setConfig: async (patch) => {
-      calls.push(['setConfig', patch])
-      return hostConfig
-    },
-    setApiKey: async (args) => {
-      calls.push(['setApiKey', args])
-      return hostConfig
-    },
-  },
+let failNextPost = null
+globalThis.fetch = async (url, init) => {
+  const method = init?.method ?? 'GET'
+  const body = init?.body === undefined ? undefined : JSON.parse(init.body)
+  calls.push([method, url, body])
+  // Only writes can fail here, so the initial GET still renders the form.
+  if (failNextPost !== null && method === 'POST') {
+    const message = failNextPost
+    failNextPost = null
+    return { ok: false, status: 400, json: async () => ({ ok: false, error: message }) }
+  }
+  return { ok: true, status: 200, json: async () => ({ ok: true, config: hostConfig }) }
 }
 
 const registrations = []
@@ -102,13 +99,8 @@ const slots = {
   inject: (_slot, run) => run(),
   register: (options, render) => registrations.push({ options, render }),
 }
-// Host remote namespaces reach the section through `ctx.remote`, published to
-// the slot by its `inject` callback — which is what the real slots service
-// resolves before rendering.
-const ctxRemote = remote
 const ctx = {
   get: (key) => (key === 'slots' ? slots : undefined),
-  remote: ctxRemote,
   effect: () => () => {},
 }
 registered.apply(ctx)
@@ -118,13 +110,7 @@ const section = registrations[0]
 check('registered into settings.section', section.options.name, 'settings.section')
 check('section id', section.options.id, 'imagegen')
 check('section label is 生图', section.options.label, '生图')
-check('declares remote in its client inject list', registered.inject.includes('remote'), true)
 
-/** Render through the slot, resolving injected props exactly as the host does. */
-const injectedProps = () => {
-  const extra = typeof section.options.inject === 'function' ? section.options.inject() : {}
-  return { ...extra }
-}
 
 /* ── render helpers ──────────────────────────────────────────────────────── */
 
@@ -144,18 +130,17 @@ const instantiate = (value) => {
 /** Mount the section and drain effects so the async config read settles.
  * Hook state is cleared first: each mount is a fresh component instance. */
 const mount = async () => {
-  const props = injectedProps()
   hookState.length = 0
   hookIndex = 0
   effects = []
-  instantiate(section.render(props))
+  instantiate(section.render({}))
   const pending = effects
   effects = []
   for (const fn of pending) fn()
   await new Promise((resolve) => setTimeout(resolve, 15))
   hookIndex = 0
   effects = []
-  return instantiate(section.render(props))
+  return instantiate(section.render({}))
 }
 
 /** Depth-first walk collecting every element in the tree. */
@@ -186,7 +171,11 @@ const nodes = collect(tree)
 const inputs = nodes.filter((node) => node.type === 'input')
 const buttons = nodes.filter((node) => node.type === 'button')
 
-check('the config was actually read', calls.some(([name]) => name === 'getConfig'), true)
+const CONFIG_ROUTE = '/plugins/dsh-imagegen/config'
+const KEY_ROUTE = '/plugins/dsh-imagegen/key'
+const hits = (method, url) => calls.filter(([m, u]) => m === method && u === url)
+
+check('the config was actually read', hits('GET', CONFIG_ROUTE).length, 1)
 check('renders a password input for the key', inputs.some((node) => node.props.type === 'password'), true)
 check(
   'password input disables autocomplete',
@@ -197,23 +186,22 @@ check('reports the existing key as configured', flattenText(tree).includes('当�
 check('reports the key source', flattenText(tree).includes('imagegen-key.json'), true)
 check('shows the resolved endpoint', flattenText(tree).includes('/v1/images/generations'), true)
 check('never renders key material', JSON.stringify(tree).includes('sk-'), false)
+check('shows a panel build marker', flattenText(tree).includes('面板版本 1.1.0'), true)
 
 // Typing a key re-renders (as React would), then saving must write it once.
 const password = inputs.find((node) => node.props.type === 'password')
 password.props.onChange({ target: { value: 'sk-typed-by-user' } })
 hookIndex = 0
 effects = []
-const typedTree = instantiate(section.render(injectedProps()))
+const typedTree = instantiate(section.render({}))
 const save = collect(typedTree)
   .filter((node) => node.type === 'button')
   .find((node) => flattenText(node) === '保存')
 check('has a save button', save !== undefined, true)
 save.props.onClick()
 await new Promise((resolve) => setTimeout(resolve, 15))
-check('save called setConfig', calls.some(([name]) => name === 'setConfig'), true)
-check('save wrote the typed key once', calls.find(([name]) => name === 'setApiKey')?.[1], {
-  apiKey: 'sk-typed-by-user',
-})
+check('save posted the config patch', hits('POST', CONFIG_ROUTE).length, 1)
+check('save wrote the typed key once', hits('POST', KEY_ROUTE)[0]?.[2], { apiKey: 'sk-typed-by-user' })
 
 // A plain save (nothing typed) must leave the stored secret alone.
 calls.length = 0
@@ -223,8 +211,8 @@ const save2 = collect(tree2)
   .find((node) => flattenText(node) === '保存')
 save2.props.onClick()
 await new Promise((resolve) => setTimeout(resolve, 15))
-check('plain save still updates config', calls.some(([name]) => name === 'setConfig'), true)
-check('plain save never touches the key', calls.some(([name]) => name === 'setApiKey'), false)
+check('plain save still updates config', hits('POST', CONFIG_ROUTE).length, 1)
+check('plain save never touches the key', hits('POST', KEY_ROUTE).length, 0)
 
 // Clearing is explicit and separate.
 calls.length = 0
@@ -236,7 +224,23 @@ const clear = collect(tree3)
 check('has a clear-key button when a key is set', clear !== undefined, true)
 clear.props.onClick()
 await new Promise((resolve) => setTimeout(resolve, 15))
-check('clear asks the host to clear', calls.find(([name]) => name === 'setApiKey')?.[1], { clear: true })
+check('clear asks the host to clear', hits('POST', KEY_ROUTE)[0]?.[2], { clear: true })
+
+// A host-side failure must surface in the panel, not throw.
+calls.length = 0
+failNextPost = '凭据服务不可用'
+const tree4 = await mount()
+const save4 = collect(tree4)
+  .filter((node) => node.type === 'button')
+  .find((node) => flattenText(node) === '保存')
+save4.props.onClick()
+await new Promise((resolve) => setTimeout(resolve, 15))
+// Re-render so the status the failed save installed is visible.
+hookIndex = 0
+effects = []
+const afterFailure = instantiate(section.render({}))
+check('a host error renders a message', flattenText(afterFailure).includes('保存失败'), true)
+check('the host message is shown verbatim', flattenText(afterFailure).includes('凭据服务不可用'), true)
 
 console.log(`\n${pass ? 'ALL PASS' : 'FAILURES PRESENT'}`)
 process.exitCode = pass ? 0 : 1

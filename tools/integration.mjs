@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { createServer } from 'node:http'
+import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
 import { rm, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -76,8 +77,7 @@ class StubCredentials extends Service {
   }
   async resolve(ref) {
     const value = this.map.get(ref)
-    return value === undefined ? undefined : { value }
-  }
+    return value === undefined ? undefined : { value }  }
   async set(ref, value) {
     this.map.set(ref, value)
   }
@@ -94,16 +94,66 @@ class StubSettings extends Service {
   }
 }
 
+/** Captures the HTTP routes the plugin registers, so they can be invoked directly. */
+class StubWebServer extends Service {
+  constructor(ctx) {
+    super(ctx, 'webServer')
+    this.routes = new Map()
+  }
+  register(route) {
+    this.routes.set(route.path, route)
+    return () => this.routes.delete(route.path)
+  }
+  /** Invoke a registered route with a fake request/response pair. */
+  async call(path, { method = 'GET', body } = {}) {
+    const route = this.routes.get(path)
+    if (route === undefined) throw new Error(`no route registered at ${path}`)
+    const payload = body === undefined ? '' : JSON.stringify(body)
+    const req = new EventEmitter()
+    req.method = method
+    const chunks = payload.length > 0 ? [Buffer.from(payload, 'utf8')] : []
+    const response = { status: 0, headers: null, body: '' }
+    const res = {
+      writeHead(status, headers) {
+        response.status = status
+        response.headers = headers ?? {}
+      },
+      end(text) {
+        response.body = text ?? ''
+        req.emit('__done')
+      },
+    }
+    const done = new Promise((resolve) => req.once('__done', resolve))
+    const handled = route.handler(req, res)
+    // Deliver the body after the handler has attached its listeners.
+    for (const chunk of chunks) req.emit('data', chunk)
+    req.emit('end')
+    await Promise.all([handled, done])
+    let json
+    try {
+      json = JSON.parse(response.body)
+    } catch {
+      json = undefined
+    }
+    return { status: response.status, json, raw: response.body }
+  }
+}
+
 /** Build a fresh context carrying the real registry plus the stubs.
  * Services are constructed directly (not via ctx.plugin) so registration is
- * synchronous and the registry sees its systemPrompt sibling immediately. */
-const buildContext = (config) => {
+ * synchronous. `ctx.inject(...)` callbacks settle on a later tick, so the
+ * microtask queue is drained before the caller inspects what was registered. */
+const buildContext = async (config) => {
   const ctx = new Context()
   const systemPrompt = new StubSystemPrompt(ctx)
   const attachments = new StubAttachments(ctx)
+  const webServer = new StubWebServer(ctx)
+  const credentials = new StubCredentials(ctx)
+  const settings = new StubSettings(ctx)
   const tools = new ToolRuntime(ctx, {})
   mod.apply(ctx, config)
-  return { ctx, attachments, tools, systemPrompt }
+  await new Promise((resolve) => setImmediate(resolve))
+  return { ctx, attachments, tools, systemPrompt, webServer, credentials, settings }
 }
 
 const baseConfig = {
@@ -120,7 +170,7 @@ const baseConfig = {
 
 /* ── 1. registration and model-facing schema ─────────────────────────────── */
 
-const { ctx, tools } = buildContext(baseConfig)
+const { ctx, tools } = await buildContext(baseConfig)
 
 check('both tools registered', ctx.tools.schemas().map((row) => row.name).sort(), ['edit_image', 'generate_image'])
 
@@ -169,7 +219,7 @@ check(
 // the real "nothing configured" state rather than whatever is on this machine.
 process.env.IMG_LEGACY_CONFIG_FILE = path.join(here, '.no-such-key-file.json')
 delete process.env.IMG_API_KEY
-const emptyCtx = buildContext(baseConfig)
+const emptyCtx = await buildContext(baseConfig)
 try {
   await emptyCtx.tools.get('generate_image').execute({ prompt: 'x' }, { signal: new AbortController().signal })
   check('missing key throws', 'no error', 'an error')
@@ -219,7 +269,7 @@ const liveConfig = {
   apiKey: 'sk-integration-secret-value',
   outputDir: outDir,
 }
-const live = buildContext(liveConfig)
+const live = await buildContext(liveConfig)
 
 const value = await live.tools.get('generate_image').execute(
   { prompt: 'a red cube', n: 1 },
@@ -247,7 +297,7 @@ const legacyFile = path.join(here, '.probe-legacy-key.json')
 await writeFile(legacyFile, JSON.stringify({ apiKey: 'sk-from-legacy-file' }))
 process.env.IMG_LEGACY_CONFIG_FILE = legacyFile
 // No configured key and no credential ref, so only the legacy file can answer.
-const legacyCtx = buildContext({ ...liveConfig, apiKey: '', apiKeyEnv: 'IMG_UNSET_KEY_ENV' })
+const legacyCtx = await buildContext({ ...liveConfig, apiKey: '', apiKeyEnv: 'IMG_UNSET_KEY_ENV' })
 const legacyValue = await legacyCtx.tools.get('generate_image').execute(
   { prompt: 'x' },
   { signal: new AbortController().signal },
@@ -284,57 +334,68 @@ try {
   check('error carries no api key', /sk-integration-secret-value/.test(error.message), false)
 }
 
-/* ── 7. the settings panel service is strictly key-free ──────────────────── */
+/* ── 7. the settings panel HTTP routes are strictly key-free ─────────────── */
 
-// The panel talks to ImagegenRuntime over Typert. Drive it directly: the point
-// of these checks is that the API key can be written but never read back.
+// The panel calls these routes with plain fetch. Driving them here is the whole
+// end-to-end check for the settings UI: it exercises the real request parsing,
+// the real response envelope, and proves the key can be written but never read.
 // Keep the legacy fallback out of the way so this section is machine-independent.
 process.env.IMG_LEGACY_CONFIG_FILE = path.join(here, '.no-such-key-file.json')
-const panelCtx = new Context()
-const panelCredentials = new StubCredentials(panelCtx)
-const panelSettings = new StubSettings(panelCtx)
-const emptyReaders = mod.configReaders({ ...baseConfig, apiKey: '', apiKeyEnv: 'IMG_PANEL_TEST_KEY' })
-const runtime = new mod.ImagegenRuntime(panelCtx, emptyReaders, { ...baseConfig, apiKey: '' })
+const panel = await buildContext({ ...baseConfig, apiKey: '', apiKeyEnv: 'IMG_PANEL_TEST_KEY' })
 
-const initial = await runtime.getConfig()
-check('panel reports keySet=false with no key anywhere', initial.keySet, false)
-check('panel reports source none', initial.keySource, 'none')
-check('panel exposes the endpoint', initial.endpoint, 'https://example.invalid/v1/images/generations')
+check('the config route is registered', panel.webServer.routes.has(mod.ROUTES.config), true)
+check('the key route is registered', panel.webServer.routes.has(mod.ROUTES.key), true)
+
+const initial = await panel.webServer.call(mod.ROUTES.config, { method: 'GET' })
+check('GET config succeeds', initial.status, 200)
+check('GET config reports ok', initial.json.ok, true)
+check('panel reports keySet=false with no key anywhere', initial.json.config.keySet, false)
+check('panel reports source none', initial.json.config.keySource, 'none')
+check('panel exposes the endpoint', initial.json.config.endpoint, 'https://example.invalid/v1/images/generations')
+check('panel payload has no apiKey field', Object.hasOwn(initial.json.config, 'apiKey'), false)
+check('panel payload is key-free', initial.raw.includes('sk-'), false)
+
+const afterWrite = await panel.webServer.call(mod.ROUTES.key, {
+  method: 'POST',
+  body: { apiKey: 'sk-panel-secret-9999' },
+})
+check('POST key succeeds', afterWrite.status, 200)
+check('writing a key flips keySet', afterWrite.json.config.keySet, true)
 check(
-  'panel payload has no apiKey field',
-  Object.hasOwn(initial, 'apiKey'),
-  false,
+  'the write reached the credential service',
+  panel.credentials.map.get('IMG_PANEL_TEST_KEY'),
+  'sk-panel-secret-9999',
 )
-check('panel payload is key-free', JSON.stringify(initial).includes('sk-'), false)
+check('the write response never contains the secret', afterWrite.raw.includes('sk-panel-secret-9999'), false)
 
-const afterWrite = await runtime.setApiKey({ apiKey: 'sk-panel-secret-9999' })
-check('writing a key flips keySet', afterWrite.keySet, true)
-check('the write went to the credential service', panelCredentials.map.get('IMG_PANEL_TEST_KEY'), 'sk-panel-secret-9999')
-check('the write never returns the secret', JSON.stringify(afterWrite).includes('sk-panel-secret-9999'), false)
+const afterSave = await panel.webServer.call(mod.ROUTES.config, {
+  method: 'POST',
+  body: { model: 'dall-e-3', timeoutMs: 4242 },
+})
+check('POST config succeeds', afterSave.status, 200)
+check('POST config mutated the model path', panel.settings.ops.find((o) => o.path[0] === 'model')?.value, 'dall-e-3')
+check('POST config mutated the timeout path', panel.settings.ops.find((o) => o.path[0] === 'timeoutMs')?.value, 4242)
+check('POST config never touches the apiKey path', panel.settings.ops.some((o) => o.path[0] === 'apiKey'), false)
+check('the save response never contains the secret', afterSave.raw.includes('sk-panel-secret-9999'), false)
 
-const afterClear = await runtime.setApiKey({ clear: true })
-check('clearing removes the stored value', panelCredentials.map.get('IMG_PANEL_TEST_KEY'), '')
-check('clearing reports keySet=false again', afterClear.keySet, false)
+const afterClear = await panel.webServer.call(mod.ROUTES.key, { method: 'POST', body: { clear: true } })
+check('clearing removes the stored value', panel.credentials.map.get('IMG_PANEL_TEST_KEY'), '')
+check('clearing reports keySet=false again', afterClear.json.config.keySet, false)
+
+const badMethod = await panel.webServer.call(mod.ROUTES.config, { method: 'PUT' })
+check('an unsupported method is rejected', badMethod.status, 405)
+check('rejections carry ok=false', badMethod.json.ok, false)
 delete process.env.IMG_LEGACY_CONFIG_FILE
 
-// Ordinary fields route through the path-addressed settings mutation, so a
-// form save can never restate (and therefore never erase) the stored secret.
-await runtime.setConfig({ model: 'dall-e-3', timeoutMs: 4242, outputDir: 'C:/tmp/out' })
-check('setConfig mutated the model path', panelSettings.ops.find((o) => o.path[0] === 'model')?.value, 'dall-e-3')
-check('setConfig mutated the timeout path', panelSettings.ops.find((o) => o.path[0] === 'timeoutMs')?.value, 4242)
-check(
-  'setConfig never touches the apiKey path',
-  panelSettings.ops.some((o) => o.path[0] === 'apiKey'),
-  false,
-)
-
-/* ── 8. the client bundle exists and registers the settings section ──────── */
+/* ── 8. the client bundle matches the routes it calls ───────────────────── */
 
 const clientSource = await readFile(path.resolve(here, '..', 'lib', 'client.js'), 'utf8')
 check('client bundle uses the ModuleLoader wrapper', clientSource.includes('window.__ModuleLoader__.load'), true)
 check('client bundle registers a settings section', clientSource.includes('settings.section'), true)
 check('client bundle labels the section 生图', clientSource.includes("label: '生图'"), true)
-check('client bundle only calls setApiKey, never reads a key', clientSource.includes('getApiKey'), false)
+check('client bundle calls the config route', clientSource.includes(`'${mod.ROUTES.config}'`), true)
+check('client bundle calls the key route', clientSource.includes(`'${mod.ROUTES.key}'`), true)
+check('client bundle never reads a key back', clientSource.includes('getApiKey'), false)
 
 await rm(outDir, { recursive: true, force: true })
 server.close()
