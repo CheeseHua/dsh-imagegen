@@ -1,0 +1,5 @@
+# Normalize line endings so the plugin loads identically on every platform.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.webp binary

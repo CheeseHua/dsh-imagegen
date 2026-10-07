@@ -1,0 +1,20 @@
+# dsh-imagegen bundle layer.
+#
+# Installing this package into a profile (`dsh plugin add github:CheeseHua/dsh-imagegen`)
+# applies this patch automatically, so no manual cordis.patch.yml editing is needed.
+# Later layers (the profile's own cordis.patch.yml, --patch overlays) override rows by id.
+#
+# Every field below is optional: the plugin's Config schema carries the
+# production defaults, and 设置 → 插件 → 插件配置 → 「生图」 writes the live
+# values (baseURL / model / outputDir / …). The API key is a write-only secret
+# and is never rendered back by the configuration panel.
+
+# Mount the plugin row. The row id doubles as the settings namespace the
+# configuration card edits.
+- insert:
+    - id: imagegen
+      name: dsh-imagegen
+      # Uncomment to seed values at install time instead of through the GUI:
+      # config:
+      #   baseURL: https://cf.api.fan
+      #   model: gpt-image-2

@@ -1,0 +1,15 @@
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+
+# Never commit local configuration or generated output: it may contain secrets
+# and/or user images.
+.env
+.env.*
+key.json
+*-key.json
+imagegen-key.json
+config.local.json
+out/
+generated/
