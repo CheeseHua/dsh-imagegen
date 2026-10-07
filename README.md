@@ -39,8 +39,8 @@ The `id` (`imagegen`) is also the settings namespace of the configuration card.
 
 ## Configuration
 
-Open **Settings → Plugins → Plugin configuration → "生图"**. The form is derived
-from the plugin's Config schema:
+Open **Settings →「生图」**. The section sits beside the other plugin sections
+(内联图片, Vision Router, …) and edits the plugin's live configuration:
 
 | Field | Default | Description |
 | --- | --- | --- |
@@ -53,6 +53,13 @@ from the plugin's Config schema:
 | `defaultSize` | _empty_ | e.g. `1024x1024`; empty defers to the provider |
 | `defaultQuality` | _empty_ | `low` / `medium` / `high`; empty defers to the provider |
 | `extraBodyJson` | _empty_ | Extra request-body JSON, e.g. `{"response_format":"b64_json"}` |
+
+> **Why this plugin needs a client bundle.** A host-only plugin never gets a
+> settings page: the Web settings panel is itself a client plugin, so a section
+> only appears when the package declares `dsh.client.platform = web` and ships
+> `lib/client.js` registering into the `settings.section` slot. `lib/client.js`
+> is that bundle, and `lib/index.js` publishes the key-free endpoint it talks to
+> (`ctx.remote.imagegen`) through a Typert manifest.
 
 ### API key resolution order
 

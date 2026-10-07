@@ -37,7 +37,8 @@ dsh plugin add github:CheeseHua/dsh-imagegen
 
 ## 配置
 
-打开 **设置 → 插件 → 插件配置 →「生图」**，表单由插件的 Config schema 自动生成：
+打开 **设置 →「生图」**。它和「内联图片」「Vision Router」等一样是设置左侧的一个栏目，
+编辑的就是插件的实时配置：
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -50,6 +51,11 @@ dsh plugin add github:CheeseHua/dsh-imagegen
 | `defaultSize` | _空_ | 默认尺寸，如 `1024x1024`；留空交给服务端 |
 | `defaultQuality` | _空_ | 默认质量：`low` / `medium` / `high`；留空交给服务端 |
 | `extraBodyJson` | _空_ | 附加请求体 JSON，例如 `{"response_format":"b64_json"}` |
+
+> **为什么必须有客户端 bundle。** 纯宿主端插件不会自动获得设置页：设置面板本身就是一个
+> 客户端插件，只有声明了 `dsh.client.platform = web` 并且提供 `lib/client.js` 注册到
+> `settings.section` 插槽，栏目才会出现。`lib/client.js` 就是这个 bundle，
+> 而 `lib/index.js` 通过 Typert manifest 发布它调用的免密端点 `ctx.remote.imagegen`。
 
 ### API Key 的取值顺序
 
