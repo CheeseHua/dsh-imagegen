@@ -30,20 +30,23 @@
     "plugin"
   ],
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "*"
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "^3.18.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
       "optional": true
     }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": ">=4.0.4",
-    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6"
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.18.4"
   },
-  "dependencies": {
-    "@deepseek-ai/schemastery": "file:C:/Users/Administrator/AppData/Roaming/npm/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/schemastery"
-  },
+  "dependencies": {},
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
